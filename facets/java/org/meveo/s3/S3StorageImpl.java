@@ -12,13 +12,11 @@ import org.meveo.admin.exception.BusinessException;
 import org.meveo.admin.util.pagination.PaginationConfiguration;
 import org.meveo.api.exception.EntityDoesNotExistsException;
 import org.meveo.model.crm.CustomFieldTemplate;
-import org.meveo.model.crm.custom.CustomFieldTypeEnum;
 import org.meveo.model.customEntities.CustomEntityInstance;
 import org.meveo.model.customEntities.CustomEntityTemplate;
 import org.meveo.model.customEntities.CustomModelObject;
 import org.meveo.model.customEntities.CustomRelationshipTemplate;
 import org.meveo.model.persistence.DBStorageType;
-import org.meveo.model.persistence.JacksonUtil;
 import org.meveo.model.storage.IStorageConfiguration;
 import org.meveo.model.storage.Repository;
 import org.meveo.persistence.PersistenceActionResult;
@@ -49,35 +47,6 @@ public class S3StorageImpl extends Script implements StorageImpl {
 	public boolean exists(IStorageConfiguration repository, CustomEntityTemplate cet, String uuid) {
 		//TODO
 		return false;
-	}
-
-	private String buildSearchRequest(StorageQuery query, Map<String, CustomFieldTemplate> fields) {
-		var json = JacksonUtil.OBJECT_MAPPER.createObjectNode();
-
-		var queries = json.putObject("query")
-			.putObject("bool")
-			.putArray("must");
-
-		query.getFilters().forEach((filterKey, filterValue) -> {
-			if (!filterKey.equals("uuid") && filterValue != null) {
-				var cft = fields.get(filterKey);
-
-				if (cft.getFieldType() == CustomFieldTypeEnum.STRING) {
-					queries.addObject()
-						.putObject("wildcard")
-						.put(filterKey.toLowerCase(), String.valueOf(filterValue));
-				} else {
-					queries.addObject()
-						.putObject("match")
-						.putObject(filterKey.toLowerCase())
-						.put("query", String.valueOf(filterValue))
-						.put("fuzziness", "AUTO");
-				}
-
-			}
-		});
-		
-		return json.toString();
 	}
 
 	@Override

@@ -1,8 +1,10 @@
 package org.meveo.s3;
 
 import java.util.Map;
+import java.util.Set;
 
 import org.meveo.admin.exception.BusinessException;
+import org.meveo.model.crm.custom.CustomFieldTypeEnum;
 import org.meveo.model.persistence.DBStorageType;
 import org.meveo.persistence.DBStorageTypeService;
 import org.meveo.service.admin.impl.ModuleInstallationContext;
@@ -16,12 +18,18 @@ public class S3InstallationScript extends ModuleScript {
     ModuleInstallationContext installationContext = getCDIBean(ModuleInstallationContext.class);
 
     @Override
+    public void execute(Map<String, Object> methodContext) throws BusinessException {
+    	postInstallModule(methodContext);
+    }
+    
+    @Override
     public void postInstallModule(Map<String, Object> methodContext) throws BusinessException {
         // Register new storage type
-        DBStorageType elasticDbStorageType = new DBStorageType();
-        elasticDbStorageType.setCode("S3");
-        elasticDbStorageType.setStorageImplScript(scriptInstanceService.findByCode("org.meveo.persistence.impl.S3StorageImpl"));
-        dbStorageTypeService.create(elasticDbStorageType);
+        DBStorageType s3DbStorageType = new DBStorageType();
+        s3DbStorageType.setCode("S3");
+        s3DbStorageType.setStorageImplScript(scriptInstanceService.findByCode("org.meveo.persistence.impl.S3StorageImpl"));
+        s3DbStorageType.setSupportedFieldTypes(Set.of(CustomFieldTypeEnum.BINARY));
+        dbStorageTypeService.create(s3DbStorageType);
     }
   
     @Override
