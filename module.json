@@ -1,0 +1,10 @@
+{
+  "code" : "mv-s3",
+  "description" : "S3 Storage implementation",
+  "license" : "GPL",
+  "currentVersion" : "1.0.0",
+  "isInDraft" : true,
+  "autoCommit" : false,
+  "moduleDependencies" : [ ],
+  "moduleFiles" : [ ]
+}
