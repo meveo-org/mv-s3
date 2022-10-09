@@ -1,6 +1,7 @@
 package org.meveo.s3;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -8,12 +9,12 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-import javax.persistence.PersistenceException;
-
 import org.meveo.admin.exception.BusinessException;
 import org.meveo.admin.util.pagination.PaginationConfiguration;
 import org.meveo.api.exception.EntityDoesNotExistsException;
 import org.meveo.model.crm.CustomFieldTemplate;
+import org.meveo.model.crm.custom.CustomFieldStorageTypeEnum;
+import org.meveo.model.crm.custom.CustomFieldTypeEnum;
 import org.meveo.model.customEntities.CustomEntityInstance;
 import org.meveo.model.customEntities.CustomEntityTemplate;
 import org.meveo.model.customEntities.CustomModelObject;
@@ -37,12 +38,12 @@ import com.amazonaws.client.builder.AwsClientBuilder.EndpointConfiguration;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.Bucket;
+import com.amazonaws.services.s3.model.ListObjectsRequest;
+import com.amazonaws.services.s3.model.ObjectListing;
+import com.amazonaws.services.s3.model.S3Object;
+import com.amazonaws.services.s3.model.S3ObjectSummary;
 
 public class S3StorageImpl extends Script implements StorageImpl {
-
-	private CustomFieldTemplateService cftService = getCDIBean(CustomFieldTemplateService.class);
-	
-	private CustomFieldInstanceService cfiService = getCDIBean(CustomFieldInstanceService.class);
 
 	private static Logger LOG = LoggerFactory.getLogger(S3StorageImpl.class);
 	
@@ -54,47 +55,56 @@ public class S3StorageImpl extends Script implements StorageImpl {
 		return dbStorageType;
 	}
 
-
 	@Override
 	public boolean exists(IStorageConfiguration repository, CustomEntityTemplate cet, String uuid) {
-		//TODO
 		return false;
 	}
 
 	@Override
 	public String findEntityIdByValues(Repository repository, IStorageConfiguration conf, CustomEntityInstance cei) {
-		StorageQuery query = new StorageQuery();
-		query.setCet(cei.getCet());
-		query.setStorageConfiguration(conf);
-		query.setFilters(cei.getCfValuesAsValues(storageType(), cei.getFieldTemplates().values(), true));
-
-		try {
-			var result = this.find(query);
-			if (result.size() == 1) {
-				return (String) result.get(0).get("uuid");
-			} else if (result.size() > 1) {
-				throw new PersistenceException("Many possible entity for values " + query.getFilters().toString());
-			}
-
-		} catch (EntityDoesNotExistsException e) {
-			throw new PersistenceException("Template does not exists", e);
-		}
-
 		return null;
 	}
 
+	@SuppressWarnings("unchecked")
 	@Override
-	public Map<String, Object> findById(IStorageConfiguration repository, CustomEntityTemplate cet, String uuid,
+	public Map<String, Object> findById(IStorageConfiguration conf, CustomEntityTemplate cet, String uuid,
 			Map<String, CustomFieldTemplate> cfts, Collection<String> fetchFields, boolean withEntityReferences) {
 			
-		//TODO
-		return null;
+		Map<String, Object> result = new HashMap<>();
+		
+		cfts.values()
+			.stream()
+			.filter(cft -> cft.getFieldType() == CustomFieldTypeEnum.BINARY)
+			.filter(cft -> fetchFields.contains(cft.getCode()))
+			.forEach(cft -> {
+				AmazonS3 client = beginTransaction(conf, 0);
+				String bucketName = S3Utils.getS3BucketName(conf, cet, cft);
+				
+				ListObjectsRequest listObjectsRequest = new ListObjectsRequest()
+						.withBucketName(bucketName)
+		                .withPrefix(uuid + "/")
+		                .withDelimiter("/");
+				
+				ObjectListing objectsListing = client.listObjects(listObjectsRequest);
+				List<S3ObjectSummary> summaries = objectsListing.getObjectSummaries();
+				
+				summaries.forEach(file -> {
+					if (cft.getStorageType() == CustomFieldStorageTypeEnum.SINGLE) {
+						result.put(cft.getCode(), client.getObject(bucketName, file.getKey()).getObjectContent());
+					} else {
+						List<Object> fileList = (List<Object>) result.computeIfAbsent(cft.getCode(), code -> new ArrayList<>());
+						fileList.add(client.getObject(bucketName, file.getKey()).getObjectContent());
+					}
+				});
+			});
+		
+		return result;
 	}
 
 	@Override
 	public List<Map<String, Object>> find(StorageQuery query) throws EntityDoesNotExistsException {
-		//TODO
-		return null;
+		// Never eagerly load files
+		return new ArrayList<>();
 	}
 
 
@@ -102,8 +112,30 @@ public class S3StorageImpl extends Script implements StorageImpl {
 	public PersistenceActionResult createOrUpdate(Repository repository, IStorageConfiguration conf, CustomEntityInstance cei,
 			Map<String, CustomFieldTemplate> customFieldTemplates, String foundUuid) throws BusinessException {
 		
-		//TODO
-		return null;
+		customFieldTemplates.values()
+			.stream()
+			.filter(cft -> cft.getFieldType() == CustomFieldTypeEnum.BINARY)
+			.forEach(cft -> {
+				AmazonS3 client = beginTransaction(conf, 0);
+				String bucketName = S3Utils.getS3BucketName(conf, cei.getCet(), cft);
+				
+				File fileValue = cei.getCfValues().getCfValue(cft.getCode()).getFileValue();
+				List<File> filesValue = cei.getCfValues().getCfValue(cft.getCode()).getListValue();
+				
+				List<File> files = new ArrayList<>();
+				if (fileValue != null) {
+					files.add(fileValue);
+				} else if (filesValue != null) {
+					filesValue.addAll(filesValue);
+				}
+				
+				files.forEach(file -> {
+					client.putObject(bucketName, foundUuid + "/" + file.getName(), file);
+				});
+				
+			});
+		
+		return new PersistenceActionResult(foundUuid);
 	}
 
 	@Override
@@ -118,9 +150,7 @@ public class S3StorageImpl extends Script implements StorageImpl {
 	}
 
 	@Override
-	public void setBinaries(IStorageConfiguration repository, CustomEntityTemplate cet, CustomFieldTemplate cft, String uuid,
-			List<File> binaries) throws BusinessException {
-
+	public void setBinaries(IStorageConfiguration conf, CustomEntityTemplate cet, CustomFieldTemplate cft, String uuid, List<File> binaries) throws BusinessException {
 	}
 
 	@Override
@@ -130,30 +160,17 @@ public class S3StorageImpl extends Script implements StorageImpl {
 
 	@Override
 	public Integer count(IStorageConfiguration repository, CustomEntityTemplate cet, PaginationConfiguration paginationConfiguration) {
-		final Map<String, Object> filters = paginationConfiguration == null ? null : paginationConfiguration.getFilters();
-
 		return 0;
 	}
 
 	@Override
 	public void cetCreated(CustomEntityTemplate cet) {
-		for (var repository : cet.getRepositories()) {
-			repository.getStorageConfigurations(storageType())
-			.forEach(conf -> {
-				//TODO
-			});
-		}
+		
 	}
 
 	@Override
 	public void removeCet(CustomEntityTemplate cet) {
-		for (var repository : cet.getRepositories()) {
-			repository.getStorageConfigurations(storageType())
-				.forEach(conf -> {
-					//TODO
-				});
-
-		}
+		
 	}
 
 	@Override
@@ -163,14 +180,17 @@ public class S3StorageImpl extends Script implements StorageImpl {
 
 	@Override
 	public void cftCreated(CustomModelObject template, CustomFieldTemplate cft) {
+		if (!cft.getFieldType().equals(CustomFieldTypeEnum.BINARY)) {
+			return;
+		}
+		
 		for (var repository : template.getRepositories()) {
 			repository.getStorageConfigurations(storageType())
 				.forEach(conf -> {
 					// Check if bucket exists
-					AmazonS3 client = clients.get(conf.getCode());
-					String orgName = conf.getCfValues().getCfValue("orgName").getStringValue();
+					AmazonS3 client = beginTransaction(conf, 0);
 					
-					String bucketName = S3Utils.getS3BucketName(orgName, template, cft);
+					String bucketName = S3Utils.getS3BucketName(conf, template, cft);
 					
 					if (client.doesBucketExistV2(bucketName)) {
 						List<String> accessibleBuckets = client.listBuckets()
@@ -188,7 +208,7 @@ public class S3StorageImpl extends Script implements StorageImpl {
 
 	@Override
 	public void cetUpdated(CustomEntityTemplate oldCet, CustomEntityTemplate cet) {
-		//NOOP - TODO later
+		//NOOP
 	}
 
 	@Override
@@ -198,7 +218,7 @@ public class S3StorageImpl extends Script implements StorageImpl {
 
 	@Override
 	public void cftUpdated(CustomModelObject template, CustomFieldTemplate oldCft, CustomFieldTemplate cft) {
-		//NOOP - TODO later
+		cftCreated(template, cft);
 	}
 
 	@Override
@@ -252,27 +272,6 @@ public class S3StorageImpl extends Script implements StorageImpl {
 	@Override
 	public void destroy() {
 		//TODO
-	}
-
-	private static Map<String, Object> getPropertyFromCft(CustomFieldTemplate cft) {
-		Map<String, Object> property = new HashMap<>();
-
-		switch (cft.getFieldType()) {
-			case LONG:
-			case LONG_TEXT:
-			case TEXT_AREA:
-				// "text"
-				property.put("type", "text");
-				break;
-			case STRING:
-				// search_as_you_type
-				property.put("type", "search_as_you_type");
-				break;
-			default:
-				break;
-		}
-
-		return property;
 	}
 
 }

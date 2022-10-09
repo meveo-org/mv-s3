@@ -5,15 +5,11 @@ package org.meveo.s3;
 
 import org.meveo.model.crm.CustomFieldTemplate;
 import org.meveo.model.customEntities.CustomModelObject;
+import org.meveo.model.storage.IStorageConfiguration;
 
-/**
- * 
- * @author heros
- * @since 
- * @version
- */
 public class S3Utils {
-	public static String getS3BucketName(String orgName, CustomModelObject template, CustomFieldTemplate cft) {
+	public static String getS3BucketName(IStorageConfiguration conf, CustomModelObject template, CustomFieldTemplate cft) {
+		String orgName = conf.getCfValues().getCfValue("orgName").getStringValue();
 		return new StringBuilder()
 				.append(orgName.toLowerCase())
 				.append(".")
