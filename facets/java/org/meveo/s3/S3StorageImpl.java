@@ -5,6 +5,8 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 import javax.persistence.PersistenceException;
 
@@ -28,6 +30,14 @@ import org.meveo.service.script.Script;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.amazonaws.auth.AWSCredentials;
+import com.amazonaws.auth.AWSStaticCredentialsProvider;
+import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.client.builder.AwsClientBuilder.EndpointConfiguration;
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.s3.model.Bucket;
+
 public class S3StorageImpl extends Script implements StorageImpl {
 
 	private CustomFieldTemplateService cftService = getCDIBean(CustomFieldTemplateService.class);
@@ -35,6 +45,8 @@ public class S3StorageImpl extends Script implements StorageImpl {
 	private CustomFieldInstanceService cfiService = getCDIBean(CustomFieldInstanceService.class);
 
 	private static Logger LOG = LoggerFactory.getLogger(S3StorageImpl.class);
+	
+	private Map<String, AmazonS3> clients = new ConcurrentHashMap<>();
 
 	private static DBStorageType storageType() {
 		DBStorageType dbStorageType = new DBStorageType();
@@ -154,7 +166,21 @@ public class S3StorageImpl extends Script implements StorageImpl {
 		for (var repository : template.getRepositories()) {
 			repository.getStorageConfigurations(storageType())
 				.forEach(conf -> {
-					//TODO
+					// Check if bucket exists
+					AmazonS3 client = clients.get(conf.getCode());
+					String orgName = conf.getCfValues().getCfValue("orgName").getStringValue();
+					
+					String bucketName = S3Utils.getS3BucketName(orgName, template, cft);
+					
+					if (client.doesBucketExistV2(bucketName)) {
+						List<String> accessibleBuckets = client.listBuckets()
+								.stream()
+								.map(Bucket::getName)
+								.collect(Collectors.toList());
+						if (accessibleBuckets.contains(bucketName)) {
+							//TODO: Raise error
+						}
+					}
 				});
 		}
 
@@ -193,7 +219,24 @@ public class S3StorageImpl extends Script implements StorageImpl {
 	@SuppressWarnings("unchecked")
 	@Override
 	public <T> T beginTransaction(IStorageConfiguration repository, int stackedCalls) {
-		return null;
+		return (T) clients.computeIfAbsent(repository.getCode(), code -> {
+			String s3Host = repository.getHostname();
+			String s3AccessKey = repository.getCredential().getUsername();
+			String s3SecretKey = repository.getCredential().getPassword();
+			String preferredRegion =  repository.getCfValues().getCfValue("preferredRegion").getStringValue();
+			
+			AWSCredentials credentials = new BasicAWSCredentials(
+				s3AccessKey, 
+				s3SecretKey
+			);
+			
+			return AmazonS3ClientBuilder
+					  .standard()
+					  .withEndpointConfiguration(new EndpointConfiguration(s3Host, preferredRegion))
+					  .withCredentials(new AWSStaticCredentialsProvider(credentials))
+					  .withRegion(preferredRegion)
+					  .build();
+		});
 	}
 
 	@Override

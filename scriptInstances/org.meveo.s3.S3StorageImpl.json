@@ -7,6 +7,11 @@
   "transactionType" : "SAME",
   "executionRoles" : [ ],
   "sourcingRoles" : [ ],
-  "mavenDependencies" : [ ],
+  "mavenDependencies" : [ {
+    "groupId" : "com.amazonaws",
+    "artifactId" : "aws-java-sdk-s3",
+    "version" : "1.12.319",
+    "coordinates" : "com.amazonaws:aws-java-sdk-s3:1.12.319"
+  } ],
   "importScriptInstances" : [ ]
 }
