@@ -8,6 +8,7 @@ import org.meveo.model.customEntities.CustomModelObject;
 import org.meveo.model.storage.IStorageConfiguration;
 
 public class S3Utils {
+	
 	public static String getS3BucketName(IStorageConfiguration conf, CustomModelObject template, CustomFieldTemplate cft) {
 		String orgName = conf.getCfValues().getCfValue("orgName").getStringValue();
 		return new StringBuilder()
@@ -17,5 +18,10 @@ public class S3Utils {
 				.append(".")
 				.append(cft.getCode().toLowerCase())
 				.toString();
+	}
+	
+	public static String getFileName(String uuid, String keyName) {
+ 		int indexOfFileName = keyName.indexOf(uuid) + uuid.length() + 1;
+		return keyName.substring(indexOfFileName);
 	}
 }

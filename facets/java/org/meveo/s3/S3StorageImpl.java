@@ -13,8 +13,8 @@ import org.meveo.admin.exception.BusinessException;
 import org.meveo.admin.util.pagination.PaginationConfiguration;
 import org.meveo.api.exception.EntityDoesNotExistsException;
 import org.meveo.model.crm.CustomFieldTemplate;
-import org.meveo.model.crm.custom.CustomFieldStorageTypeEnum;
 import org.meveo.model.crm.custom.CustomFieldTypeEnum;
+import org.meveo.model.customEntities.BinaryProvider;
 import org.meveo.model.customEntities.CustomEntityInstance;
 import org.meveo.model.customEntities.CustomEntityTemplate;
 import org.meveo.model.customEntities.CustomModelObject;
@@ -25,8 +25,6 @@ import org.meveo.model.storage.Repository;
 import org.meveo.persistence.PersistenceActionResult;
 import org.meveo.persistence.StorageImpl;
 import org.meveo.persistence.StorageQuery;
-import org.meveo.service.crm.impl.CustomFieldInstanceService;
-import org.meveo.service.crm.impl.CustomFieldTemplateService;
 import org.meveo.service.script.Script;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,7 +38,6 @@ import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.Bucket;
 import com.amazonaws.services.s3.model.ListObjectsRequest;
 import com.amazonaws.services.s3.model.ObjectListing;
-import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 
 public class S3StorageImpl extends Script implements StorageImpl {
@@ -89,12 +86,13 @@ public class S3StorageImpl extends Script implements StorageImpl {
 				List<S3ObjectSummary> summaries = objectsListing.getObjectSummaries();
 				
 				summaries.forEach(file -> {
-					if (cft.getStorageType() == CustomFieldStorageTypeEnum.SINGLE) {
-						result.put(cft.getCode(), client.getObject(bucketName, file.getKey()).getObjectContent());
-					} else {
-						List<Object> fileList = (List<Object>) result.computeIfAbsent(cft.getCode(), code -> new ArrayList<>());
-						fileList.add(client.getObject(bucketName, file.getKey()).getObjectContent());
-					}
+					List<BinaryProvider> fileList = (List<BinaryProvider>) result.computeIfAbsent(cft.getCode(), code -> new ArrayList<>());
+					fileList.add(
+						new BinaryProvider(
+							S3Utils.getFileName(uuid, file.getKey()), 
+							() -> client.getObject(bucketName, file.getKey()).getObjectContent()
+						)
+					);
 				});
 			});
 		
@@ -123,16 +121,32 @@ public class S3StorageImpl extends Script implements StorageImpl {
 				List<File> filesValue = cei.getCfValues().getCfValue(cft.getCode()).getListValue();
 				
 				List<File> files = new ArrayList<>();
+				List<String> fileNames = new ArrayList<>();
 				if (fileValue != null) {
 					files.add(fileValue);
+					fileNames.add(fileValue.getName());
 				} else if (filesValue != null) {
 					filesValue.addAll(filesValue);
+					fileNames.addAll(filesValue.stream().map(File::getName).collect(Collectors.toList()));
 				}
 				
 				files.forEach(file -> {
 					client.putObject(bucketName, foundUuid + "/" + file.getName(), file);
 				});
 				
+				// Remove objects not present on the updated list
+				ListObjectsRequest listObjectsRequest = new ListObjectsRequest()
+						.withBucketName(bucketName)
+		                .withPrefix(foundUuid + "/")
+		                .withDelimiter("/");
+				
+				ObjectListing objectsListing = client.listObjects(listObjectsRequest);
+				List<S3ObjectSummary> summaries = objectsListing.getObjectSummaries();
+				summaries.stream()
+					.filter(summary -> !fileNames.contains(S3Utils.getFileName(foundUuid, summary.getKey())))
+					.forEach(summary -> {
+						client.deleteObject(bucketName, summary.getKey());
+					});
 			});
 		
 		return new PersistenceActionResult(foundUuid);
@@ -146,7 +160,7 @@ public class S3StorageImpl extends Script implements StorageImpl {
 
 	@Override
 	public void update(Repository repository, IStorageConfiguration conf, CustomEntityInstance cei) throws BusinessException {
-		//TODO
+		createOrUpdate(repository, conf, cei, cei.getFieldTemplates(), cei.getUuid());
 	}
 
 	@Override
