@@ -5,14 +5,17 @@ package org.meveo.s3;
 
 import org.meveo.model.crm.CustomFieldTemplate;
 import org.meveo.model.customEntities.CustomModelObject;
+import org.meveo.model.module.MeveoModule;
 import org.meveo.model.storage.IStorageConfiguration;
 
 public class S3Utils {
 	
-	public static String getS3BucketName(IStorageConfiguration conf, CustomModelObject template, CustomFieldTemplate cft) {
+	public static String getS3BucketName(IStorageConfiguration conf, MeveoModule module, CustomModelObject template, CustomFieldTemplate cft) {
 		String orgName = conf.getCfValues().getCfValue("orgName").getStringValue();
 		return new StringBuilder()
-				.append(orgName.toLowerCase())
+				.append(orgName.toLowerCase().trim().replaceAll("\\s", "-"))
+				.append(".")
+				.append(module.getCode().trim().toLowerCase().replaceAll("\\s", "-"))
 				.append(".")
 				.append(template.getCode().toLowerCase())
 				.append(".")

@@ -12,6 +12,7 @@ import java.util.stream.Collectors;
 import org.meveo.admin.exception.BusinessException;
 import org.meveo.admin.util.pagination.PaginationConfiguration;
 import org.meveo.api.exception.EntityDoesNotExistsException;
+import org.meveo.cache.CustomFieldsCacheContainerProvider;
 import org.meveo.model.crm.CustomFieldTemplate;
 import org.meveo.model.crm.custom.CustomFieldTypeEnum;
 import org.meveo.model.customEntities.BinaryProvider;
@@ -19,12 +20,14 @@ import org.meveo.model.customEntities.CustomEntityInstance;
 import org.meveo.model.customEntities.CustomEntityTemplate;
 import org.meveo.model.customEntities.CustomModelObject;
 import org.meveo.model.customEntities.CustomRelationshipTemplate;
+import org.meveo.model.module.MeveoModule;
 import org.meveo.model.persistence.DBStorageType;
 import org.meveo.model.storage.IStorageConfiguration;
 import org.meveo.model.storage.Repository;
 import org.meveo.persistence.PersistenceActionResult;
 import org.meveo.persistence.StorageImpl;
 import org.meveo.persistence.StorageQuery;
+import org.meveo.service.custom.CustomEntityTemplateService;
 import org.meveo.service.script.Script;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +46,9 @@ import com.amazonaws.services.s3.model.S3ObjectSummary;
 public class S3StorageImpl extends Script implements StorageImpl {
 
 	private static Logger LOG = LoggerFactory.getLogger(S3StorageImpl.class);
+	
+	private CustomEntityTemplateService cetService = getCDIBean(CustomEntityTemplateService.class);
+	private CustomFieldsCacheContainerProvider customFieldsCache = getCDIBean(CustomFieldsCacheContainerProvider.class);
 	
 	private Map<String, AmazonS3> clients = new ConcurrentHashMap<>();
 
@@ -68,6 +74,7 @@ public class S3StorageImpl extends Script implements StorageImpl {
 			Map<String, CustomFieldTemplate> cfts, Collection<String> fetchFields, boolean withEntityReferences) {
 			
 		Map<String, Object> result = new HashMap<>();
+		MeveoModule module = cetService.findModuleOf(cet);
 		
 		cfts.values()
 			.stream()
@@ -75,7 +82,7 @@ public class S3StorageImpl extends Script implements StorageImpl {
 			.filter(cft -> fetchFields.contains(cft.getCode()))
 			.forEach(cft -> {
 				AmazonS3 client = beginTransaction(conf, 0);
-				String bucketName = S3Utils.getS3BucketName(conf, cet, cft);
+				String bucketName = S3Utils.getS3BucketName(conf, module, cet, cft);
 				
 				ListObjectsRequest listObjectsRequest = new ListObjectsRequest()
 						.withBucketName(bucketName)
@@ -110,12 +117,14 @@ public class S3StorageImpl extends Script implements StorageImpl {
 	public PersistenceActionResult createOrUpdate(Repository repository, IStorageConfiguration conf, CustomEntityInstance cei,
 			Map<String, CustomFieldTemplate> customFieldTemplates, String foundUuid) throws BusinessException {
 		
+		MeveoModule module = cetService.findModuleOf(cei.getCet());
+		
 		customFieldTemplates.values()
 			.stream()
 			.filter(cft -> cft.getFieldType() == CustomFieldTypeEnum.BINARY)
 			.forEach(cft -> {
 				AmazonS3 client = beginTransaction(conf, 0);
-				String bucketName = S3Utils.getS3BucketName(conf, cei.getCet(), cft);
+				String bucketName = S3Utils.getS3BucketName(conf, module, cei.getCet(), cft);
 				
 				File fileValue = cei.getCfValues().getCfValue(cft.getCode()).getFileValue();
 				List<File> filesValue = cei.getCfValues().getCfValue(cft.getCode()).getListValue();
@@ -198,22 +207,27 @@ public class S3StorageImpl extends Script implements StorageImpl {
 			return;
 		}
 		
+        CustomEntityTemplate cet = customFieldsCache.getCustomEntityTemplate(CustomEntityTemplate.getCodeFromAppliesTo(cft.getAppliesTo()));
+        MeveoModule relatedModule = cetService.findModuleOf(cet);
+		
 		for (var repository : template.getRepositories()) {
 			repository.getStorageConfigurations(storageType())
 				.forEach(conf -> {
 					// Check if bucket exists
 					AmazonS3 client = beginTransaction(conf, 0);
 					
-					String bucketName = S3Utils.getS3BucketName(conf, template, cft);
+					String bucketName = S3Utils.getS3BucketName(conf, relatedModule, template, cft);
 					
 					if (client.doesBucketExistV2(bucketName)) {
 						List<String> accessibleBuckets = client.listBuckets()
 								.stream()
 								.map(Bucket::getName)
 								.collect(Collectors.toList());
-						if (accessibleBuckets.contains(bucketName)) {
+						if (!accessibleBuckets.contains(bucketName)) {
 							//TODO: Raise error
 						}
+					} else {
+						client.createBucket(bucketName);
 					}
 				});
 		}
@@ -268,7 +282,6 @@ public class S3StorageImpl extends Script implements StorageImpl {
 					  .standard()
 					  .withEndpointConfiguration(new EndpointConfiguration(s3Host, preferredRegion))
 					  .withCredentials(new AWSStaticCredentialsProvider(credentials))
-					  .withRegion(preferredRegion)
 					  .build();
 		});
 	}
