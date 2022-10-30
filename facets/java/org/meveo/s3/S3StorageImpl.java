@@ -4,11 +4,14 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+import org.apache.commons.lang3.StringUtils;
 import org.meveo.admin.exception.BusinessException;
 import org.meveo.admin.util.pagination.PaginationConfiguration;
 import org.meveo.api.exception.EntityDoesNotExistsException;
@@ -84,6 +87,8 @@ public class S3StorageImpl extends Script implements StorageImpl {
 				AmazonS3 client = beginTransaction(conf, 0);
 				String bucketName = S3Utils.getS3BucketName(conf, module, cet, cft);
 				
+				LOG.info("Retrieving binaries in bucket {}", bucketName);
+				
 				ListObjectsRequest listObjectsRequest = new ListObjectsRequest()
 						.withBucketName(bucketName)
 		                .withPrefix(uuid + "/")
@@ -119,6 +124,8 @@ public class S3StorageImpl extends Script implements StorageImpl {
 		
 		MeveoModule module = cetService.findModuleOf(cei.getCet());
 		
+		final String uuid = StringUtils.isEmpty(foundUuid) ? cei.getUuid() : foundUuid;
+		
 		customFieldTemplates.values()
 			.stream()
 			.filter(cft -> cft.getFieldType() == CustomFieldTypeEnum.BINARY)
@@ -126,39 +133,65 @@ public class S3StorageImpl extends Script implements StorageImpl {
 				AmazonS3 client = beginTransaction(conf, 0);
 				String bucketName = S3Utils.getS3BucketName(conf, module, cei.getCet(), cft);
 				
-				File fileValue = cei.getCfValues().getCfValue(cft.getCode()).getFileValue();
-				List<File> filesValue = cei.getCfValues().getCfValue(cft.getCode()).getListValue();
-				
-				List<File> files = new ArrayList<>();
-				List<String> fileNames = new ArrayList<>();
-				if (fileValue != null) {
-					files.add(fileValue);
-					fileNames.add(fileValue.getName());
-				} else if (filesValue != null) {
-					filesValue.addAll(filesValue);
-					fileNames.addAll(filesValue.stream().map(File::getName).collect(Collectors.toList()));
-				}
-				
-				files.forEach(file -> {
-					client.putObject(bucketName, foundUuid + "/" + file.getName(), file);
-				});
-				
+				if (client.doesBucketExistV2(bucketName)) {
+					Set<String> fileNames = new HashSet<>();
+					String fileName = cei.getCfValues().getCfValue(cft.getCode()).getStringValue();
+					if (fileName != null) {
+						fileNames.add(fileName);
+					}
+					
+					List<String> filesNames = cei.getCfValues().getCfValue(cft.getCode()).getListStringValue();
+					if (filesNames != null) {
+						fileNames.addAll(filesNames);
+					}
+					
+					LOG.debug("Filenames : {}", fileNames);
+					
+					File fileValue = cei.getCfValues().getCfValue(cft.getCode()).getFileValue();
+					List<File> filesValue = cei.getCfValues().getCfValue(cft.getCode()).getListValue();
+					
+					if (fileValue != null || (filesValue != null && !filesValue.isEmpty())) {
+						List<File> files = new ArrayList<>();
+						if (fileValue != null) {
+							files.add(fileValue);
+							fileNames.add(fileValue.getName());
+						} else if (filesValue != null) {
+							filesValue.addAll(filesValue);
+							fileNames.addAll(filesValue.stream().map(File::getName).collect(Collectors.toList()));
+						}
+						
+						files.forEach(file -> {
+							if (file != null) {
+								LOG.info("Uploading file {} to bucket {} for uuid {}", file, bucketName, uuid);
+								client.putObject(bucketName, uuid + "/" + file.getName(), file);
+							}
+						});
+					}
+					
 				// Remove objects not present on the updated list
 				ListObjectsRequest listObjectsRequest = new ListObjectsRequest()
 						.withBucketName(bucketName)
-		                .withPrefix(foundUuid + "/")
+		                .withPrefix(uuid + "/")
 		                .withDelimiter("/");
+				
 				
 				ObjectListing objectsListing = client.listObjects(listObjectsRequest);
 				List<S3ObjectSummary> summaries = objectsListing.getObjectSummaries();
+				LOG.debug("Files summary : {}", summaries);
+				
 				summaries.stream()
-					.filter(summary -> !fileNames.contains(S3Utils.getFileName(foundUuid, summary.getKey())))
+					.filter(summary -> !fileNames.contains(S3Utils.getFileName(uuid, summary.getKey())))
 					.forEach(summary -> {
+						LOG.debug("Delete file {} from bucket", summary.getKey());
 						client.deleteObject(bucketName, summary.getKey());
 					});
-			});
+				
+			} else {
+				LOG.warn("Bucket {} does not exists", bucketName);
+			}
+		});
 		
-		return new PersistenceActionResult(foundUuid);
+		return new PersistenceActionResult(uuid);
 	}
 
 	@Override
