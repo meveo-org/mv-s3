@@ -28,7 +28,7 @@ public class S3InstallationScript extends ModuleScript {
         DBStorageType s3DbStorageType = new DBStorageType();
         s3DbStorageType.setCode("S3");
         
-        var s3Script = scriptInstanceService.findByCode("org.meveo.persistence.impl.S3StorageImpl");
+        var s3Script = scriptInstanceService.findByCode("org.meveo.s3.S3StorageImpl");
         if (s3Script == null) {
         	throw new BusinessException("S3 Script impl does not exists");
         }
