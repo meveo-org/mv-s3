@@ -15,7 +15,6 @@ import org.apache.commons.lang3.StringUtils;
 import org.meveo.admin.exception.BusinessException;
 import org.meveo.admin.util.pagination.PaginationConfiguration;
 import org.meveo.api.exception.EntityDoesNotExistsException;
-import org.meveo.cache.CustomFieldsCacheContainerProvider;
 import org.meveo.model.crm.CustomFieldTemplate;
 import org.meveo.model.crm.custom.CustomFieldTypeEnum;
 import org.meveo.model.customEntities.BinaryProvider;
@@ -30,6 +29,7 @@ import org.meveo.model.storage.Repository;
 import org.meveo.persistence.PersistenceActionResult;
 import org.meveo.persistence.StorageImpl;
 import org.meveo.persistence.StorageQuery;
+import org.meveo.service.crm.impl.CustomFieldTemplateService;
 import org.meveo.service.custom.CustomEntityTemplateService;
 import org.meveo.service.script.Script;
 import org.slf4j.Logger;
@@ -42,6 +42,8 @@ import com.amazonaws.client.builder.AwsClientBuilder.EndpointConfiguration;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.Bucket;
+import com.amazonaws.services.s3.model.DeleteObjectsRequest;
+import com.amazonaws.services.s3.model.DeleteObjectsResult;
 import com.amazonaws.services.s3.model.ListObjectsRequest;
 import com.amazonaws.services.s3.model.ObjectListing;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
@@ -51,7 +53,7 @@ public class S3StorageImpl extends Script implements StorageImpl {
 	private static Logger LOG = LoggerFactory.getLogger(S3StorageImpl.class);
 	
 	private CustomEntityTemplateService cetService = getCDIBean(CustomEntityTemplateService.class);
-	private CustomFieldsCacheContainerProvider customFieldsCache = getCDIBean(CustomFieldsCacheContainerProvider.class);
+	private CustomFieldTemplateService cftService = getCDIBean(CustomFieldTemplateService.class);
 	
 	private Map<String, AmazonS3> clients = new ConcurrentHashMap<>();
 
@@ -210,8 +212,41 @@ public class S3StorageImpl extends Script implements StorageImpl {
 	}
 
 	@Override
-	public void remove(IStorageConfiguration repository, CustomEntityTemplate cet, String uuid) throws BusinessException {
-		//TODO
+	public void remove(IStorageConfiguration conf, CustomEntityTemplate cet, String uuid) throws BusinessException {
+		MeveoModule module = cetService.findModuleOf(cet);
+		
+		cftService.findByAppliesTo(cet.getAppliesTo())
+			.values()
+			.stream()
+			.filter(cft -> cft.getFieldType() == CustomFieldTypeEnum.BINARY)
+			.forEach(cft -> {
+				AmazonS3 client = beginTransaction(conf, 0);
+				String bucketName = S3Utils.getS3BucketName(conf, module, cet, cft);
+				
+				if (client.doesBucketExistV2(bucketName)) {
+					// Remove objects not present on the updated list
+					ListObjectsRequest listObjectsRequest = new ListObjectsRequest()
+							.withBucketName(bucketName)
+			                .withPrefix(uuid + "/")
+			                .withDelimiter("/");
+					
+					
+					String[] keys = client.listObjects(listObjectsRequest)
+							.getObjectSummaries()
+							.stream()
+							.map(S3ObjectSummary::getKey)
+							.toArray(String[]::new);
+					
+					DeleteObjectsRequest deleteRequest = new DeleteObjectsRequest(bucketName)
+							.withKeys(keys);
+					
+					DeleteObjectsResult results = client.deleteObjects(deleteRequest);
+					LOG.debug("Deleted objects {}", results.getDeletedObjects());
+					
+				} else {
+					LOG.warn("Bucket {} does not exists", bucketName);
+				}
+			});
 	}
 
 	@Override
@@ -240,7 +275,7 @@ public class S3StorageImpl extends Script implements StorageImpl {
 			return;
 		}
 		
-        CustomEntityTemplate cet = customFieldsCache.getCustomEntityTemplate(CustomEntityTemplate.getCodeFromAppliesTo(cft.getAppliesTo()));
+        CustomEntityTemplate cet = cetService.findByCode(CustomEntityTemplate.getCodeFromAppliesTo(cft.getAppliesTo()));
         MeveoModule relatedModule = cetService.findModuleOf(cet);
 		
 		for (var repository : template.getRepositories()) {
