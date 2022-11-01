@@ -46,6 +46,7 @@ import com.amazonaws.services.s3.model.DeleteObjectsRequest;
 import com.amazonaws.services.s3.model.DeleteObjectsResult;
 import com.amazonaws.services.s3.model.ListObjectsRequest;
 import com.amazonaws.services.s3.model.ObjectListing;
+import com.amazonaws.services.s3.model.ObjectMetadata;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 
 public class S3StorageImpl extends Script implements StorageImpl {
@@ -104,7 +105,8 @@ public class S3StorageImpl extends Script implements StorageImpl {
 					fileList.add(
 						new BinaryProvider(
 							S3Utils.getFileName(uuid, file.getKey()), 
-							() -> client.getObject(bucketName, file.getKey()).getObjectContent()
+							() -> client.getObject(bucketName, file.getKey()).getObjectContent(),
+							false
 						)
 					);
 				});
@@ -136,39 +138,13 @@ public class S3StorageImpl extends Script implements StorageImpl {
 				String bucketName = S3Utils.getS3BucketName(conf, module, cei.getCet(), cft);
 				
 				if (client.doesBucketExistV2(bucketName)) {
-					Set<String> fileNames = new HashSet<>();
-					String fileName = cei.getCfValues().getCfValue(cft.getCode()).getStringValue();
-					if (fileName != null) {
-						fileNames.add(fileName);
-					}
+					var cfValue = cei.getCfValues().getCfValue(cft.getCode());
+					Set<String> fileNames = cfValue.getFileNames();
 					
-					List<String> filesNames = cei.getCfValues().getCfValue(cft.getCode()).getListStringValue();
-					if (filesNames != null) {
-						fileNames.addAll(filesNames);
-					}
-					
-					LOG.debug("Filenames : {}", fileNames);
-					
-					File fileValue = cei.getCfValues().getCfValue(cft.getCode()).getFileValue();
-					List<File> filesValue = cei.getCfValues().getCfValue(cft.getCode()).getListValue();
-					
-					if (fileValue != null || (filesValue != null && !filesValue.isEmpty())) {
-						List<File> files = new ArrayList<>();
-						if (fileValue != null) {
-							files.add(fileValue);
-							fileNames.add(fileValue.getName());
-						} else if (filesValue != null) {
-							filesValue.addAll(filesValue);
-							fileNames.addAll(filesValue.stream().map(File::getName).collect(Collectors.toList()));
-						}
-						
-						files.forEach(file -> {
-							if (file != null) {
-								LOG.info("Uploading file {} to bucket {} for uuid {}", file, bucketName, uuid);
-								client.putObject(bucketName, uuid + "/" + file.getName(), file);
-							}
-						});
-					}
+					cfValue.getBinaries().forEach(binary -> {
+						LOG.info("Uploading file {} to bucket {} for uuid {}", binary.getFileName(), bucketName, uuid);
+						client.putObject(bucketName, uuid + "/" + binary.getFileName(), binary.getBinary(), new ObjectMetadata());
+					});
 					
 				// Remove objects not present on the updated list
 				ListObjectsRequest listObjectsRequest = new ListObjectsRequest()
